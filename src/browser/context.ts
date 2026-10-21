@@ -8,9 +8,10 @@ import { mkdirSync, chmodSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { HermesClient, HermesUnavailableError } from '../hermes-client.js';
+import { resolveTaxYear } from '../config.js';
 
 const DEFAULT_USER_DATA_DIR = resolve(homedir(), '.freetaxusa-mcp', 'browser-profile');
-const TAX_YEAR = process.env.FREETAXUSA_TAX_YEAR ?? '2025';
+export const TAX_YEAR = resolveTaxYear(process.env.FREETAXUSA_TAX_YEAR);
 
 export const BASE_URL = `https://www.freetaxusa.com/taxes${TAX_YEAR}/taxcontrol`;
 export const AUTH_URL = `https://auth.freetaxusa.com/?PRMPT&appYear=${TAX_YEAR}`;
@@ -63,6 +64,11 @@ export async function acquirePageLock(): Promise<() => void> {
   };
 }
 
+/** The browser runs headless unless FREETAXUSA_HEADLESS=false. */
+export function isHeadless(): boolean {
+  return process.env.FREETAXUSA_HEADLESS !== 'false';
+}
+
 function ensureUserDataDir(): string {
   const dir = process.env.FREETAXUSA_USER_DATA_DIR
     ? resolve(process.env.FREETAXUSA_USER_DATA_DIR.replace('~', homedir()))
@@ -79,10 +85,8 @@ export async function getBrowserContext(): Promise<BrowserContext> {
   if (browserContext) return browserContext;
 
   const userDataDir = ensureUserDataDir();
-  const headless = process.env.FREETAXUSA_HEADLESS !== 'false';
-
   browserContext = await chromium.launchPersistentContext(userDataDir, {
-    headless,
+    headless: isHeadless(),
     viewport: { width: 1280, height: 800 },
     args: [
       '--disable-blink-features=AutomationControlled',

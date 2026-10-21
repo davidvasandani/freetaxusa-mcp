@@ -23,7 +23,7 @@ npm test         # Run unit tests
 ## Tool Categories
 
 ### Phase 1 (Implemented)
-- `authenticate` - Login with email/password
+- `authenticate` - Login with username/password or interactively (person signs in in a visible browser); continues two-step verification, reports captchas
 - `get_session_status` - Check session state
 - `read_current_page` - Read form fields on current page
 - `save_and_continue` - Submit current page
@@ -38,6 +38,12 @@ npm test         # Run unit tests
 
 ### Phase 3 (Stubbed)
 - `fill_deductions`, `review_return`, `file_extension`, `get_form_status`
+
+## Sign-in site
+
+- `auth.freetaxusa.com/?PRMPT&appYear=YYYY` is a single-page app; one app serves every tax year
+- Selectors and step paths live in `src/browser/auth-page.ts` (taken from the live page and FreeTaxUSA's own WebMCP tools)
+- hCaptcha runs on submit and usually shows a puzzle to automated browsers, so the embedded login needs `FREETAXUSA_HEADLESS=false`
 
 ## Security
 
