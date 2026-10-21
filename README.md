@@ -44,7 +44,7 @@ You: "Here's my W-2, help me file"
 
 | Tool | Description |
 |------|-------------|
-| `authenticate` | Log in. With Hermes configured, the session is brokered (no credentials needed). Otherwise pass email/password — used once, never stored. |
+| `authenticate` | Log in. With Hermes configured, the session is brokered (no credentials needed). Otherwise pass username/password — used once, never stored — or `interactive: true` so the person signs in themselves. Handles two-step verification and reports when a captcha needs a person. See [Signing in without Hermes](#signing-in-without-hermes). |
 | `get_session_status` | Check if session is active, which tax year and section is loaded. |
 
 ### Page Interaction
@@ -145,19 +145,19 @@ Or for Claude Desktop (`claude_desktop_config.json`):
 | `FREETAXUSA_LEGACY_AUTH` | `false` | Opt back into the embedded Playwright login even when Hermes is configured-but-down. Default fails loudly on a broker outage. |
 | `FREETAXUSA_HEADLESS` | `true` | Set to `false` to see the browser window |
 | `FREETAXUSA_USER_DATA_DIR` | `~/.freetaxusa-mcp/browser-profile/` | Browser profile directory |
-| `FREETAXUSA_TAX_YEAR` | `2025` | Tax year to file (change for prior years) |
+| `FREETAXUSA_TAX_YEAR` | `2025` | Tax year to file (change for prior years). Must be between 2018 and last calendar year; the server refuses to start otherwise. |
 
 ### Authentication via Hermes
 
 FreeTaxUSA has no API — authentication is a browser login session (cookies). By
-default this server drives an embedded Playwright login with the email/password
+default this server drives an embedded Playwright login with the username/password
 you pass to the `authenticate` tool.
 
 When the [Hermes](https://github.com/) auth broker is configured, it becomes the
 **authoritative auth path**: Hermes performs the login on the host (handling SSO,
 MFA, captcha) and hands this server a fresh cookie session, which is injected
 into the browser context. In this mode the `authenticate` tool needs **no
-email/password** — just call it.
+username/password** — just call it.
 
 ```bash
 export HERMES_URL=http://127.0.0.1:9876
@@ -170,14 +170,53 @@ export HERMES_CLIENT_TOKEN="$(cat ~/.hermes/client.token)"
 Behavior:
 
 - **Hermes configured + reachable** → cookie session brokered by Hermes; embedded login is skipped.
-- **Hermes configured + unreachable** → authentication **fails loudly** (does not silently fall back to the embedded login). Set `FREETAXUSA_LEGACY_AUTH=true` to opt into the embedded fallback and supply email/password.
-- **Hermes not configured** → embedded Playwright login as before (email/password required).
+- **Hermes configured + unreachable** → authentication **fails loudly** (does not silently fall back to the embedded login). Set `FREETAXUSA_LEGACY_AUTH=true` to opt into the embedded fallback and supply username/password.
+- **Hermes not configured** → embedded Playwright login (see below).
 
 > **Operator setup required:** this server becomes Hermes-capable in code, but
 > runtime success depends on the operator registering FreeTaxUSA `cookie-session`
 > credentials with the Hermes broker. Until that is done, set
 > `FREETAXUSA_LEGACY_AUTH=true` (or leave Hermes unconfigured) to use the
 > embedded login.
+
+### Signing in without Hermes
+
+FreeTaxUSA signs in with a **username** (which may or may not be an email
+address). The sign-in page runs an **hCaptcha** check, and it often shows an
+image puzzle to automated browsers. A headless browser cannot get past it, so
+for the embedded login run with a visible browser:
+
+```bash
+FREETAXUSA_HEADLESS=false node dist/index.js
+```
+
+There are two ways to sign in:
+
+- **Interactive (recommended):** call `authenticate` with `interactive: true`.
+  The sign-in page opens in the browser window and the person types their
+  password, solves any puzzle and enters their two-step code themselves.
+  Credentials never pass through the agent. Each call waits up to
+  `waitSeconds` (default 40); call again with `interactive: true` to keep waiting.
+- **Username and password:** call `authenticate` with `username` and
+  `password`. The result tells the agent what comes next:
+  - `captchaRequired` — the person solves the puzzle in the browser window,
+    then the agent calls `authenticate` again with no arguments.
+  - `mfaRequired` with `step: "choose_verification_method"` — call again with
+    `verificationMethod` (`text`, `voice_call`, `email` or `authenticator_app`,
+    plus `phone` if several numbers are listed).
+  - `mfaRequired` with `step: "verification_code"` — call again with `mfaCode`
+    (and optionally `rememberDevice`). Sign-in continues from the code page
+    rather than starting over, so the code is not wasted.
+  - `authenticated: true` — done. A passkey offer after sign-in is declined
+    automatically ("Not Now"); nothing on the account changes.
+
+Required account changes FreeTaxUSA may ask for after the password (a new
+password, choosing a username) are reported back; finish them with
+`interactive: true`.
+
+FreeTaxUSA's sign-in page also ships its own agent tools (WebMCP), whose
+descriptions say passwords and codes should be typed by the person or a password
+manager rather than passed through an agent. The interactive mode follows that.
 
 ### Use
 
@@ -186,11 +225,12 @@ Once configured, start a conversation with Claude:
 ```
 You: I need to file my taxes. Log me in to FreeTaxUSA.
 
-Claude: I'll authenticate you now. What's your FreeTaxUSA email and password?
+Claude: [calls authenticate with interactive: true] I've opened the FreeTaxUSA sign-in page
+        in the browser window. Sign in there, and tell me when you're done.
 
-You: email is me@example.com, password is hunter2
+You: done
 
-Claude: [calls authenticate tool] You're logged in for tax year 2025.
+Claude: [calls authenticate with interactive: true] You're logged in for tax year 2025.
         Let's start with your personal information. What's your full name?
 
 You: John Smith, SSN 123-45-6789, born 01/15/1990
@@ -240,7 +280,7 @@ src/
 
 **Single-page mutex.** The browser has one active page. An async mutex serializes all tool calls to prevent race conditions from concurrent invocations.
 
-**Credentials never stored.** Email and password are accepted as tool inputs, used to fill the login form, and discarded. The persistent browser context retains session cookies only. The profile directory is chmod 0700.
+**Credentials never stored.** Username and password are accepted as tool inputs, used to fill the login form, and discarded. With `interactive: true` they never pass through the server at all. The persistent browser context retains session cookies only. The profile directory is chmod 0700.
 
 ## Security
 
@@ -278,6 +318,8 @@ To file back taxes, set the tax year:
 ```bash
 FREETAXUSA_TAX_YEAR=2024 node dist/index.js
 ```
+
+FreeTaxUSA offers tax years 2018 onward. The year is read once at startup, so restart the server to switch years.
 
 FreeTaxUSA supports free federal filing for prior years. Note that prior year returns cannot be e-filed -- they must be printed and mailed.
 
